@@ -54,55 +54,7 @@ def get_thread_id():
     return threading.get_ident()
 
 
-class CustomConnectionPool(ThreadedConnectionPool):
-
-    def _connect(self, key=None):
-        """Patched version of AbstractConnectionPool._connect(), which adds
-        isolation levels, read-only mode, and encoding settings."""
-        # Only use the 'dsn' keyword argument
-        LOG.debug("Making a new connection to PostgreSQL "
-                  "for pool %s, key %s" % (repr(self), repr(key)))
-        args = self._kwargs
-        conn = psycopg2.connect(dsn=args['dsn'])
-
-        # Patch JJ 2016-05-05: This is the moment to set the correct
-        # transaction isolation level, encoding, and types.
-        conn.set_session(isolation_level=int(args['tilevel']),
-                         readonly=bool(args['readonlymode']))
-        if 'encoding' in args:
-            conn.set_client_encoding(args['encoding'])
-        if 'typecasts' in args:
-            for tc in args['typecasts']:
-                register_type(tc, conn)
-
-        # The following code is identical to the code in
-        # AbstractConnectionPool
-        if key is not None:
-            self._used[key] = conn
-            self._rused[id(conn)] = key
-        else:
-            self._pool.append(conn)
-        return conn
-
-    def _getkey(self):
-        """Return the thread identifier as a key."""
-        return get_thread_id()
-
-    def _putconn(self, conn, key=None, close=False):
-        """Patched version of AbstractConnectionPool._putconn(), which closes
-        the connection only if 'close' is set, not if pool size is greater
-        than minimum or 'close' is set."""
-        stored_minconn = self.minconn
-        self.minconn = 10  # magic number: number of connections to keep
-        retval = AbstractConnectionPool._putconn(
-            self, conn=conn, key=key, close=close)
-        self.minconn = stored_minconn
-        return retval
-
-
 # the DB object, managing all the real query work
-
-
 class DB(TM, dbi_db.DB):
 
     _p_oid = _p_changed = _registered = None
@@ -143,12 +95,12 @@ class DB(TM, dbi_db.DB):
         self._tls = threading.local()
 
         def configure(connection: psycopg.Connection):
-            connection.set_autocommit(self.autocommit)
-            connection.set_read_only(self.readonlymode)
-            connection.set_isolation_level(self.tilevel)
+            connection.autocommit = self.autocommit
+            connection.read_only = self.readonlymode
+            connection.isolation_level = self.tilevel
 
         self.pool = ConnectionPool(
-            min_size=0, max_size=100, conninfo=self.dsn, configure=configure)
+            min_size=0, max_size=100, conninfo=self.dsn, configure=configure, name=self.physical_path)
 
     def getconn(self, init=True):
         if getattr(self._tls, "conn", None) is None:
@@ -159,6 +111,7 @@ class DB(TM, dbi_db.DB):
         conn = self.getconn()
         if close:
             conn.close()
+        self._tls.conn = None
         return self.pool.putconn(conn)
 
     def getcursor(self):
