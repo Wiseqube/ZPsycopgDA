@@ -19,10 +19,13 @@ from Shared.DC.ZRDB.TM import TM
 from Shared.DC.ZRDB import dbi_db
 
 import psycopg2
+import psycopg
 from psycopg2.extensions import INTEGER, LONGINTEGER, BOOLEAN, DATE, TIME
 from psycopg2.extensions import register_type
 from psycopg2 import NUMBER, STRING, ROWID, DATETIME
 from psycopg2.pool import AbstractConnectionPool, ThreadedConnectionPool
+from psycopg_pool import ConnectionPool
+import threading
 
 try:
     from Zope2.App.startup import RetryError, RetryDelayError
@@ -137,28 +140,34 @@ class DB(TM, dbi_db.DB):
 
         self.make_mappings()
 
-        self.pool = CustomConnectionPool(
-            # 100 = sufficiently high magic number > max number of threads
-            minconn=0, maxconn=100,
-            dsn=self.dsn, tilevel=self.tilevel, typecasts=self.typecasts,
-            readonlymode=self.readonlymode)
+        self._tls = threading.local()
+
+        def configure(connection: psycopg.Connection):
+            connection.set_autocommit(self.autocommit)
+            connection.set_read_only(self.readonlymode)
+            connection.set_isolation_level(self.tilevel)
+
+        self.pool = ConnectionPool(
+            min_size=0, max_size=100, conninfo=self.dsn, configure=configure)
 
     def getconn(self, init=True):
-        conn = self.pool.getconn()
-        return conn
+        if getattr(self._tls, "conn", None) is None:
+            self._tls.conn = self.pool.getconn()
+        return self._tls.conn
 
     def putconn(self, close=False):
-        conn = self.pool.getconn()
-        return self.pool.putconn(conn, close=close)
+        conn = self.getconn()
+        if close:
+            conn.close()
+        return self.pool.putconn(conn)
 
     def getcursor(self):
-        conn = self.pool.getconn()
+        conn = self.getconn()
         try:
             cursor = conn.cursor()
-        except psycopg2.InterfaceError:
+        except psycopg.InterfaceError:
             # Connection is broken. Put away, then raise.
-            conn = self.pool.getconn()
-            self.pool.putconn(conn, close=True)
+            self.putconn(close=True)
             raise
         return cursor
 
@@ -215,7 +224,7 @@ class DB(TM, dbi_db.DB):
         # database failed, getconn() will fail also.
         try:
             conn = self.getconn(False)
-        except psycopg2.Error:
+        except psycopg.Error:
             LOG.error('getconn() failed during abort.')
             return
 
@@ -227,11 +236,11 @@ class DB(TM, dbi_db.DB):
                 # abort().
                 try:
                     conn.tpc_rollback()
-                except psycopg2.ProgrammingError:
+                except psycopg.ProgrammingError:
                     pass
             else:
                 conn.rollback()
-        except psycopg2.InterfaceError:
+        except psycopg.InterfaceError:
             LOG.error('Rollback failed, just closing connection.')
         if conn in self.tainted:
             self.tainted.remove(conn)
@@ -458,7 +467,7 @@ class DB(TM, dbi_db.DB):
             if c.description is not None:
                 nselects += 1
                 if c.description != desc and nselects > 1:
-                    raise psycopg2.ProgrammingError(
+                    raise psycopg.ProgrammingError(
                         'multiple selects in single query not allowed')
                 if max_rows:
                     res = c.fetchmany(max_rows)

@@ -23,22 +23,14 @@ import Acquisition
 import Shared.DC.ZRDB.Connection
 
 # Python2 backward compatibility
-try:
-    from .db import DB
-except SyntaxError:
-    from db import DB
+from .db import DB
 
 from App.special_dtml import HTMLFile
 from ExtensionClass import Base
 from DateTime import DateTime
 
 # ImageFile is deprecated in Zope >= 2.9
-try:
-    from App.ImageFile import ImageFile
-except ImportError:
-    # Zope < 2.9.  If PIL's installed with a .pth file, we're probably
-    # hosed.
-    from ImageFile import ImageFile
+from App.ImageFile import ImageFile
 
 # import psycopg and functions/singletons needed for date/time conversions
 

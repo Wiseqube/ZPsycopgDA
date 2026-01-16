@@ -54,6 +54,8 @@ setup(
     install_requires=[
         'setuptools',
         # -*- Extra requirements: -*-
+        'psycopg[c]',
+        'psycopg[pool]'
     ],
     entry_points="""
     # -*- Entry points: -*-
