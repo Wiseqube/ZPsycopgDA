@@ -4,4 +4,4 @@ ZPsycopgDA.egg-info/
 .DS_Store
 *.pyc
 *~
-
+.tox
